@@ -1,0 +1,7 @@
+openai
+Pillow
+mcp
+beautifulsoup4
+lxml
+requests
+PyYAML

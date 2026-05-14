@@ -1,0 +1,73 @@
+#!/bin/bash
+
+t_dir=$1
+if [ ! -z "$t_dir" ]; then
+    if [ -d "$t_dir" ]; then
+        shift
+        cd "$t_dir"
+    fi
+fi
+
+export ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL?"Please set the ANTHROPIC_BASE_URL environment variable."}
+export ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-bedrock-sonnet-4.5}
+export ANTHROPIC_SMALL_FAST_MODEL=${ANTHROPIC_SMALL_FAST_MODEL:-bedrock-haiku-4.5}
+
+export DOCKER_IMAGE=${DOCKER_IMAGE:-ghcr.io/ai/claude:latest}
+
+extra_opts=
+if [ ! -z "$SSH_AUTH_SOCK" ]; then
+    b_sock=$(readlink -f "$SSH_AUTH_SOCK")
+    b_dir=${b_sock##*/}
+    export C_SSH_AUTH_SOCK=/dev/shm/$b_dir
+    extra_opts="-v $SSH_AUTH_SOCK:/dev/shm/$b_dir -e SSH_AUTH_SOCK=$C_SSH_AUTH_SOCK $extra_opts"
+fi
+# Share Docker socket if available and set DOCKER_HOST
+DOCKER_HOST_VAR=""
+if [ -S /var/run/docker.sock ]; then
+    extra_opts="-v /var/run/docker.sock:/var/run/docker.sock $extra_opts"
+    DOCKER_HOST_VAR="unix:///var/run/docker.sock"
+elif [ ! -z "$DOCKER_HOST" ]; then
+    # If DOCKER_HOST is set externally (e.g., remote docker), pass it through
+    DOCKER_HOST_VAR="$DOCKER_HOST"
+fi
+# Share containerd socket and config
+CONTAINERD_ADDRESS_VAR=""
+if [ -S /run/containerd/containerd.sock ]; then
+    extra_opts="-v /run/containerd/containerd.sock:/run/containerd/containerd.sock $extra_opts"
+    CONTAINERD_ADDRESS_VAR="/run/containerd/containerd.sock"
+elif [ ! -z "$CONTAINERD_ADDRESS" ]; then
+    # If CONTAINERD_ADDRESS is set externally, pass it through
+    CONTAINERD_ADDRESS_VAR="$CONTAINERD_ADDRESS"
+fi
+if [ -d /etc/containerd ]; then
+    extra_opts="-v /etc/containerd:/etc/containerd:ro $extra_opts"
+fi
+HERE=$(readlink -f "${PWD}")
+BDIR=${HERE##*/}
+exec docker run --rm -it \
+    $extra_opts \
+    $DOCKER_RUN_OPTS \
+    -e TERM \
+    -e ALL_PROXY \
+    -e HTTP_PROXY \
+    -e HTTPS_PROXY \
+    -e ANTHROPIC_AUTH_TOKEN \
+    -e ANTHROPIC_API_TOKEN \
+    -e ANTHROPIC_BASE_URL \
+    -e ANTHROPIC_MODEL \
+    -e ANTHROPIC_SMALL_FAST_MODEL \
+    -e TMPDIR=/workspace/$BDIR/.tmp \
+    -e CLAUDE_CODE_TMPDIR=/workspace/$BDIR/.tmp \
+    -e CLAUDE_CONFIG_DIR=/workspace/.claude \
+    -e NODE_TLS_REJECT_UNAUTHORIZED=0 \
+    -e NODE_OPTIONS="--max-old-space-size=4096" \
+    -e UID=${EUID} \
+    -e BDIR=/workspace/$BDIR \
+    -e DOCKER_REGISTRY \
+    -e DOCKER_REGISTRY_USER \
+    -e DOCKER_REGISTRY_PASS \
+    --name claude-${LOGNAME}-$BDIR \
+    -v claude-${LOGNAME}:/workspace \
+    -v "${PWD}":/workspace/$BDIR \
+        "$DOCKER_IMAGE" \
+            $*
